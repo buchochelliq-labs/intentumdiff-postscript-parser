@@ -14,22 +14,22 @@
 //!   .eps → "postscript" unconditionally.
 //!   .ps  → only if the content begins with "%!" (PostScript magic comment).
 
-use intentdiff_plugin_sdk::tree::{SemanticNode, SemanticNodeBuilder};
+use intentumdiff_plugin_sdk::tree::{SemanticNode, SemanticNodeBuilder};
 
 wit_bindgen::generate!({
     path: "wit/plugin.wit",
     world: "parser-plugin",
 });
 
-use crate::exports::intentdiff::plugin::parser::ExamplePair;
-use crate::exports::intentdiff::plugin::parser::Guest;
-use crate::exports::intentdiff::plugin::parser::LanguageInfoRecord;
-use crate::exports::intentdiff::plugin::parser::ParserMode;
+use crate::exports::intentumdiff::plugin::parser::ExamplePair;
+use crate::exports::intentumdiff::plugin::parser::Guest;
+use crate::exports::intentumdiff::plugin::parser::LanguageInfoRecord;
+use crate::exports::intentumdiff::plugin::parser::ParserMode;
 
 const PLUGIN_METADATA: &str = include_str!("../plugin_metadata.info");
 
 fn language_info_for(ids: Vec<String>) -> Vec<LanguageInfoRecord> {
-    let metadata = intentdiff_plugin_sdk::metadata::parse_plugin_metadata(PLUGIN_METADATA);
+    let metadata = intentumdiff_plugin_sdk::metadata::parse_plugin_metadata(PLUGIN_METADATA);
     ids.into_iter()
         .map(|language_id| {
             let info = metadata.language_or_default(&language_id);
@@ -257,7 +257,7 @@ export!(PostScriptParser);
 mod tests {
     use super::*;
 
-    intentdiff_plugin_sdk::plugin_compliance_tests! {
+    intentumdiff_plugin_sdk::plugin_compliance_tests! {
         process: parse_postscript,
         detect_fn: detect_language_impl,
         detect_cases: [
@@ -284,26 +284,26 @@ mod tests {
     #[test]
     fn test_valid_json_no_error() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_valid_json(&out, "SAMPLE");
-        intentdiff_plugin_sdk::testing::assert_no_error(&out, "SAMPLE");
+        intentumdiff_plugin_sdk::testing::assert_valid_json(&out, "SAMPLE");
+        intentumdiff_plugin_sdk::testing::assert_no_error(&out, "SAMPLE");
     }
 
     #[test]
     fn test_root_is_postscript_file() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_root_node_type(&out, "postscript_file", "SAMPLE");
+        intentumdiff_plugin_sdk::testing::assert_root_node_type(&out, "postscript_file", "SAMPLE");
     }
 
     #[test]
     fn test_procedure_found() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_contains_node_type(&out, "procedure", "procedure");
+        intentumdiff_plugin_sdk::testing::assert_contains_node_type(&out, "procedure", "procedure");
     }
 
     #[test]
     fn test_bound_procedure_found() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_contains_node_type(
+        intentumdiff_plugin_sdk::testing::assert_contains_node_type(
             &out,
             "bound_procedure",
             "bound_procedure",
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn test_variable_definition_found() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_contains_node_type(
+        intentumdiff_plugin_sdk::testing::assert_contains_node_type(
             &out,
             "variable_definition",
             "variable_definition",
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn test_labels_nonempty() {
         let out = parse_postscript(SAMPLE);
-        intentdiff_plugin_sdk::testing::assert_labels_nonempty(&out, "procedure", "labels");
-        intentdiff_plugin_sdk::testing::assert_labels_nonempty(&out, "bound_procedure", "labels");
+        intentumdiff_plugin_sdk::testing::assert_labels_nonempty(&out, "procedure", "labels");
+        intentumdiff_plugin_sdk::testing::assert_labels_nonempty(&out, "bound_procedure", "labels");
     }
 }
