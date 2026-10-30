@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn statement_spans_cover_edited_numeric_bytes() {
         let line = "  /Helvetica findfont 14 scalefont setfont  ";
-        let source = format!("%!PS\\n{line}\\n");
+        let source = format!("%!PS\n{line}\n");
         let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
         let statement = root["children"].as_array().unwrap().iter()
             .find(|node| node["node_type"] == "ps_statement").unwrap();
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn definition_value_span_is_exact_utf8_byte_interval() {
         let line = "  /größe 14 def ";
-        let source = format!("%!PS\\n{line}\\n");
+        let source = format!("%!PS\n{line}\n");
         let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
         let definition = root["children"].as_array().unwrap().iter()
             .find(|node| node["node_type"] == "variable_definition").unwrap();
@@ -420,7 +420,7 @@ mod tests {
     fn procedure_and_indented_statement_spans_are_source_anchored() {
         let statement = "    (café) 14 show";
         let close = "  } bind def ";
-        let source = format!("%!PS\\n  /draw {{\\n{statement}\\n{close}\\n");
+        let source = format!("%!PS\n  /draw {{\n{statement}\n{close}\n");
         let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
         let procedure = root["children"].as_array().unwrap().iter()
             .find(|node| node["node_type"] == "bound_procedure").unwrap();
