@@ -428,7 +428,9 @@ mod tests {
         assert_eq!(procedure["position"]["start_col"].as_u64(), Some(2));
         assert_eq!(procedure["position"]["end_line"].as_u64(), Some(3));
         assert_eq!(procedure["position"]["end_col"].as_u64(), Some(close.trim_end().len() as u64));
-        let body = &procedure["children"][0];
+        let body = procedure["children"].as_array().unwrap().iter()
+            .find(|node| node["node_type"] == "ps_statement"
+                && node["label"] == statement.trim()).unwrap();
         assert_eq!(body["node_type"], "ps_statement");
         assert_eq!(body["position"]["start_line"].as_u64(), Some(2));
         assert_eq!(body["position"]["start_col"].as_u64(), Some(4));
