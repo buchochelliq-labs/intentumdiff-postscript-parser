@@ -53,12 +53,36 @@ struct PostScriptParser;
 // Node helpers
 // ---------------------------------------------------------------------------
 
-fn leaf(id: &str, node_type: &str, label: &str, line: u32) -> SemanticNode {
-    SemanticNodeBuilder::new(id, node_type, label, line, 0, line, 0, String::new()).build()
+// Columns are UTF-8 byte offsets into the original line, not character counts.
+// Work on the untrimmed line so indentation and multi-byte characters retain
+// their source coordinates.
+fn line_columns(raw_line: &str) -> (u32, u32) {
+    let start = raw_line.len() - raw_line.trim_start().len();
+    let end = raw_line.trim_end().len();
+    (start as u32, end as u32)
 }
 
-fn block_node(id: &str, node_type: &str, label: &str, start: u32, end: u32) -> SemanticNode {
-    SemanticNodeBuilder::new(id, node_type, label, start, 0, end, 0, String::new()).build()
+fn leaf(id: &str, node_type: &str, label: &str, line: u32, raw_line: &str) -> SemanticNode {
+    let (start_col, end_col) = line_columns(raw_line);
+    SemanticNodeBuilder::new(
+        id, node_type, label, line, start_col, line, end_col, String::new(),
+    )
+    .build()
+}
+
+fn block_node(
+    id: &str,
+    node_type: &str,
+    label: &str,
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+) -> SemanticNode {
+    SemanticNodeBuilder::new(
+        id, node_type, label, start_line, start_col, end_line, end_col, String::new(),
+    )
+    .build()
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +110,8 @@ pub(crate) fn parse_postscript(source: &str) -> String {
     let mut brace_depth: i32 = 0;
     let mut total_lines = 0u32;
 
-    // Track an open procedure: (name, start_line, interior statement children)
-    let mut pending: Option<(String, u32, Vec<SemanticNode>)> = None;
+    // Track an open procedure: (name, start_line, start_byte_col, statements).
+    let mut pending: Option<(String, u32, u32, Vec<SemanticNode>)> = None;
 
     for (idx, raw_line) in source.lines().enumerate() {
         let lineno = idx as u32;
@@ -118,11 +142,27 @@ pub(crate) fn parse_postscript(source: &str) -> String {
                 if !name.is_empty() {
                     let id = format!("0.{}", counter);
                     counter += 1;
-                    let mut var = leaf(&id, "variable_definition", name, lineno);
+                    let mut var = leaf(&id, "variable_definition", name, lineno, raw_line);
                     // #46: the VALUE tokens between the name and `def` are review content.
-                    let value = trimmed[name_end..trimmed.len() - 3].trim();
+                    // Anchor the value within the original UTF-8 line, not at column zero.
+                    let value_region = &trimmed[name_end..trimmed.len() - 3];
+                    let value = value_region.trim();
                     if !value.is_empty() {
-                        var.children = vec![leaf(&format!("{id}.0"), "ps_value", value, lineno)];
+                        let value_start = (raw_line.len() - raw_line.trim_start().len())
+                            + name_end
+                            + (value_region.len() - value_region.trim_start().len());
+                        let value_end = value_start + value.len();
+                        var.children = vec![SemanticNodeBuilder::new(
+                            format!("{id}.0"),
+                            "ps_value",
+                            value,
+                            lineno,
+                            value_start as u32,
+                            lineno,
+                            value_end as u32,
+                            String::new(),
+                        )
+                        .build()];
                     }
                     children.push(var);
                 }
@@ -142,7 +182,7 @@ pub(crate) fn parse_postscript(source: &str) -> String {
                         + 1;
                     let name = before[1..name_end].to_string();
                     if !name.is_empty() {
-                        pending = Some((name, lineno, Vec::new()));
+                        pending = Some((name, lineno, line_columns(raw_line).0, Vec::new()));
                     }
                 }
             }
@@ -150,7 +190,7 @@ pub(crate) fn parse_postscript(source: &str) -> String {
 
         // When brace depth returns to 0, close the pending procedure
         if brace_depth == 0 && pending.is_some() {
-            let (name, start, statements) = pending.take().unwrap();
+            let (name, start, start_col, statements) = pending.take().unwrap();
             let upper = trimmed.to_uppercase();
             // "bind def" → bound_procedure; plain "def" → procedure
             let node_type = if upper.contains("BIND") && upper.ends_with("DEF") {
@@ -160,7 +200,15 @@ pub(crate) fn parse_postscript(source: &str) -> String {
             };
             let id = format!("0.{}", counter);
             counter += 1;
-            let mut block = block_node(&id, node_type, &name, start, lineno);
+            let mut block = block_node(
+                &id,
+                node_type,
+                &name,
+                start,
+                start_col,
+                lineno,
+                line_columns(raw_line).1,
+            );
             block.children = statements
                 .into_iter()
                 .enumerate()
@@ -179,12 +227,12 @@ pub(crate) fn parse_postscript(source: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some((_, _, statements)) = pending.as_mut() {
-            statements.push(leaf("tmp", "ps_statement", trimmed, lineno));
+        if let Some((_, _, _, statements)) = pending.as_mut() {
+            statements.push(leaf("tmp", "ps_statement", trimmed, lineno, raw_line));
         } else if depth_before == 0 && open_count == 0 {
             let id = format!("0.{}", counter);
             counter += 1;
-            children.push(leaf(&id, "ps_statement", trimmed, lineno));
+            children.push(leaf(&id, "ps_statement", trimmed, lineno, raw_line));
         }
     }
 
@@ -195,7 +243,7 @@ pub(crate) fn parse_postscript(source: &str) -> String {
         0,
         0,
         total_lines,
-        0,
+        source.lines().last().map_or(0, |line| line_columns(line).1),
         String::new(),
     )
     .children(children)
@@ -333,6 +381,63 @@ mod tests {
             "postscript"
         );
         assert_eq!(detect_language_impl("doc.ps", "plain text"), "");
+    }
+
+    #[test]
+    fn statement_spans_cover_edited_numeric_bytes() {
+        let line = "  /Helvetica findfont 14 scalefont setfont  ";
+        let source = format!("%!PS\n{line}\n");
+        let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
+        let statement = root["children"].as_array().unwrap().iter()
+            .find(|node| node["node_type"] == "ps_statement").unwrap();
+        let span = &statement["position"];
+        let numeric = line.find("14").unwrap() as u64;
+        assert_eq!(span["start_line"].as_u64(), Some(1));
+        assert_eq!(span["end_line"].as_u64(), Some(1));
+        assert_eq!(span["start_col"].as_u64(), Some(2));
+        assert_eq!(span["end_col"].as_u64(), Some(line.trim_end().len() as u64));
+        assert!(span["start_col"].as_u64().unwrap() <= numeric);
+        assert!(span["end_col"].as_u64().unwrap() >= numeric + 2);
+    }
+
+    #[test]
+    fn definition_value_span_is_exact_utf8_byte_interval() {
+        let line = "  /größe 14 def ";
+        let source = format!("%!PS\n{line}\n");
+        let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
+        let definition = root["children"].as_array().unwrap().iter()
+            .find(|node| node["node_type"] == "variable_definition").unwrap();
+        let value = &definition["children"][0];
+        assert_eq!(value["node_type"], "ps_value");
+        assert_eq!(value["label"], "14");
+        assert_eq!(value["position"]["start_line"].as_u64(), Some(1));
+        let numeric = line.find("14").unwrap() as u64;
+        assert_eq!(value["position"]["start_col"].as_u64(), Some(numeric));
+        assert_eq!(value["position"]["end_col"].as_u64(), Some(numeric + 2));
+    }
+
+    #[test]
+    fn procedure_and_indented_statement_spans_are_source_anchored() {
+        let statement = "    (café) 14 show";
+        let close = "  } bind def ";
+        let source = format!("%!PS\n  /draw {{\n{statement}\n{close}\n");
+        let root: serde_json::Value = serde_json::from_str(&parse_postscript(&source)).unwrap();
+        let procedure = root["children"].as_array().unwrap().iter()
+            .find(|node| node["node_type"] == "bound_procedure").unwrap();
+        assert_eq!(procedure["position"]["start_line"].as_u64(), Some(1));
+        assert_eq!(procedure["position"]["start_col"].as_u64(), Some(2));
+        assert_eq!(procedure["position"]["end_line"].as_u64(), Some(3));
+        assert_eq!(procedure["position"]["end_col"].as_u64(), Some(close.trim_end().len() as u64));
+        let body = procedure["children"].as_array().unwrap().iter()
+            .find(|node| node["node_type"] == "ps_statement"
+                && node["label"] == statement.trim()).unwrap();
+        assert_eq!(body["node_type"], "ps_statement");
+        assert_eq!(body["position"]["start_line"].as_u64(), Some(2));
+        assert_eq!(body["position"]["start_col"].as_u64(), Some(4));
+        assert_eq!(body["position"]["end_col"].as_u64(), Some(statement.len() as u64));
+        let numeric = statement.find("14").unwrap() as u64;
+        assert!(body["position"]["start_col"].as_u64().unwrap() <= numeric);
+        assert!(body["position"]["end_col"].as_u64().unwrap() >= numeric + 2);
     }
 
     #[test]
