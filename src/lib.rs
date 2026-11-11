@@ -8,6 +8,7 @@
 //!   postscript_file    — root
 //!   procedure          — /name { … } def (label = name)
 //!   bound_procedure    — /name { … } bind def (label = name)
+//!   procedure_access   — child: readonly/executeonly/noaccess before `def`
 //!   variable_definition — /name value def  (no braces, label = name)
 //!
 //! Detection:
@@ -440,11 +441,36 @@ pub(crate) fn parse_postscript(source: &str) -> String {
         }
 
         let id = next_id(&mut counter);
-        let body: Vec<SemanticNode> = rows(&tokens[body_start..body_end])
+        let mut body: Vec<SemanticNode> = rows(&tokens[body_start..body_end])
             .into_iter()
             .enumerate()
             .map(|(n, row)| statement_node(&format!("{id}.{n}"), row))
             .collect();
+        // Access modifiers (`readonly`, `executeonly`, `noaccess`) change the
+        // procedure's permissions, so they are hashed content (#9); `bind` is
+        // carried by the node type.
+        if end > k {
+            let access: Vec<&Token<'_>> = tokens[j + 1..k]
+                .iter()
+                .filter(|t| t.text != "bind")
+                .collect();
+            if let (Some(first), Some(last)) = (access.first(), access.last()) {
+                let label: Vec<&str> = access.iter().map(|t| t.text).collect();
+                body.push(
+                    SemanticNodeBuilder::new(
+                        format!("{id}.{}", body.len()),
+                        "procedure_access",
+                        label.join(" "),
+                        first.start_line,
+                        first.start_col,
+                        last.end_line,
+                        last.end_col,
+                        String::new(),
+                    )
+                    .build(),
+                );
+            }
+        }
         let node_type = if bound {
             "bound_procedure"
         } else {
@@ -838,5 +864,45 @@ mod tests {
         assert_eq!(a["children"][0]["node_type"], "variable_definition");
         assert_eq!(a["children"][0]["children"][0]["label"], "1 2 add");
         assert_eq!(a["structural_hash"], b["structural_hash"]);
+    }
+
+    // #9: access modifiers consumed with the procedure are semantic content.
+    #[test]
+    fn procedure_access_modifiers_are_semantic() {
+        let old = "/f {\n  1\n}\nreadonly def\n";
+        let new = "/f {\n  1\n}\nexecuteonly def\n";
+        let (o, n) = (top(old), top(new));
+        assert_eq!(o.len(), 1);
+        let access = |t: &serde_json::Value| {
+            t["children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["node_type"] == "procedure_access")
+                .cloned()
+                .unwrap_or_else(|| panic!("no procedure_access in {t}"))
+        };
+        assert_eq!(access(&o[0])["label"], "readonly");
+        assert_eq!(access(&n[0])["label"], "executeonly");
+        let a = access(&o[0]);
+        assert_eq!(a["position"]["start_line"], 3);
+        assert_eq!(a["position"]["start_col"], 0);
+        assert_eq!(a["position"]["end_col"], 8);
+        assert_ne!(o[0]["structural_hash"], n[0]["structural_hash"]);
+        // `bind` is carried by the node type, not the access child.
+        let b = top("/f { 1 } bind noaccess def\n");
+        assert_eq!(b[0]["node_type"], "bound_procedure");
+        assert_eq!(access(&b[0])["label"], "noaccess");
+        let plain = top("/f { 1 } bind def\n");
+        assert!(plain[0]["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["node_type"] != "procedure_access"));
+        // Moving the modifier between the brace line and the next is layout.
+        assert_eq!(
+            tree("/f {\n  1\n} readonly def\n")["structural_hash"],
+            tree(old)["structural_hash"]
+        );
     }
 }
